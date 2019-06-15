@@ -1,0 +1,17 @@
+stages:
+  - build
+
+build:
+  stage: build
+  image: golang:1.12
+  script:
+    - cd cmd/merged-ssh-agent
+    - go build -o amd64/linux/merged-ssh-agent
+    - GOOS=darwin go build -o amd64/darwin/merged-ssh-agent
+    - cd
+    - cp -r cmd/merged-ssh-agent/amd64 .
+  artifacts:
+    paths:
+      - amd64
+  only:
+    - master
