@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 
+	"gitlab.com/gartnera/merged-ssh-agent/reconnect"
 	"golang.org/x/crypto/ssh"
 	sshAgent "golang.org/x/crypto/ssh/agent"
 )
@@ -39,6 +40,9 @@ func (a MergedAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error
 	var err error
 	for _, agent := range a.agents {
 		res, err = agent.Sign(key, data)
+		if err == nil {
+			break
+		}
 	}
 	return res, err
 }
@@ -144,7 +148,7 @@ func NewMergedAgent(agents []sshAgent.Agent) MergedAgent {
 func NewMergedAgentFromPaths(paths []string) (MergedAgent, error) {
 	var agents []sshAgent.Agent
 	for _, path := range paths {
-		conn, err := net.Dial("unix", path)
+		conn, err := reconnect.Dial("unix", path)
 		if err != nil {
 			return MergedAgent{}, err
 		}
