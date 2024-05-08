@@ -16,21 +16,40 @@ import (
 	sshAgent "golang.org/x/crypto/ssh/agent"
 )
 
+func WithBannedKeys(keys []string) func(*MergedAgent) {
+	return func(m *MergedAgent) {
+		m.bannedKeys = keys
+	}
+}
+
 type MergedAgent struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     *sync.WaitGroup
-	agents []sshAgent.Agent
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         *sync.WaitGroup
+	agents     []sshAgent.Agent
+	bannedKeys []string
 }
 
 func (a MergedAgent) List() ([]*sshAgent.Key, error) {
 	var keys []*sshAgent.Key
 	for _, agent := range a.agents {
-		l, err := agent.List()
+		agentKeys, err := agent.List()
 		if err != nil {
 			return keys, err
 		}
-		keys = append(keys, l...)
+		for _, key := range agentKeys {
+			keyStr := strings.ReplaceAll(string(ssh.MarshalAuthorizedKey(key)), "\n", " ") + key.Comment
+			ok := true
+			for _, bannedKey := range a.bannedKeys {
+				if bannedKey == keyStr {
+					ok = false
+				}
+			}
+			if !ok {
+				continue
+			}
+			keys = append(keys, key)
+		}
 	}
 	return keys, nil
 }
@@ -132,7 +151,7 @@ func (a MergedAgent) Close() {
 	a.wg.Wait()
 }
 
-func NewMergedAgent(agents []sshAgent.Agent) MergedAgent {
+func NewMergedAgent(agents []sshAgent.Agent, options ...func(*MergedAgent)) MergedAgent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := MergedAgent{
 		ctx:    ctx,
@@ -142,10 +161,13 @@ func NewMergedAgent(agents []sshAgent.Agent) MergedAgent {
 	for _, agent := range agents {
 		a.agents = append(a.agents, agent)
 	}
+	for _, opt := range options {
+		opt(&a)
+	}
 	return a
 }
 
-func NewMergedAgentFromPaths(paths []string) (MergedAgent, error) {
+func NewMergedAgentFromPaths(paths []string, options ...func(*MergedAgent)) (MergedAgent, error) {
 	var agents []sshAgent.Agent
 	for _, path := range paths {
 		conn, err := reconnect.Dial("unix", path)
@@ -155,7 +177,7 @@ func NewMergedAgentFromPaths(paths []string) (MergedAgent, error) {
 		agent := sshAgent.NewClient(conn)
 		agents = append(agents, agent)
 	}
-	return NewMergedAgent(agents), nil
+	return NewMergedAgent(agents, options...), nil
 }
 
 func ServeEnv() {
@@ -167,8 +189,10 @@ func ServeEnv() {
 	if listenPath == "" {
 		log.Fatalln("Error: $SSH_AUTH_SOCK_MERGED required")
 	}
+	bannedVar := os.Getenv("BANNED_KEYS")
+	bannedKeys := strings.Split(bannedVar, ",")
 	sockets := strings.Split(socketsVar, ",")
-	agent, err := NewMergedAgentFromPaths(sockets)
+	agent, err := NewMergedAgentFromPaths(sockets, WithBannedKeys(bannedKeys))
 	if err != nil {
 		panic(err)
 	}
