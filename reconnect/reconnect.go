@@ -23,7 +23,11 @@ func (c *myConn) tryReconnect() error {
 func (c *myConn) Read(b []byte) (int, error) {
 	n, err := c.conn.Read(b)
 	if err != nil {
-		c.tryReconnect()
+		err = c.tryReconnect()
+		if err != nil {
+			return 0, err
+		}
+		n, err = c.conn.Read(b)
 	}
 	return n, err
 }
@@ -31,7 +35,11 @@ func (c *myConn) Read(b []byte) (int, error) {
 func (c *myConn) Write(b []byte) (int, error) {
 	n, err := c.conn.Write(b)
 	if err != nil {
-		c.tryReconnect()
+		err = c.tryReconnect()
+		if err != nil {
+			return 0, err
+		}
+		n, err = c.conn.Write(b)
 	}
 	return n, err
 }
