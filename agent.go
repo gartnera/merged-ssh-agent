@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -22,6 +23,32 @@ func WithBannedKeys(keys []string) func(*MergedAgent) {
 	}
 }
 
+func agentKeyToStr(key *sshAgent.Key) string {
+	return strings.ReplaceAll(string(ssh.MarshalAuthorizedKey(key)), "\n", " ") + key.Comment
+}
+
+func agentListKeysBanned(agent sshAgent.Agent, bannedKeys []string) ([]*sshAgent.Key, error) {
+	var keys []*sshAgent.Key
+	agentKeys, err := agent.List()
+	if err != nil {
+		return keys, err
+	}
+	for _, key := range agentKeys {
+		keyStr := agentKeyToStr(key)
+		ok := true
+		for _, bannedKey := range bannedKeys {
+			if bannedKey == keyStr {
+				ok = false
+			}
+		}
+		if !ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
 type MergedAgent struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -33,37 +60,29 @@ type MergedAgent struct {
 func (a MergedAgent) List() ([]*sshAgent.Key, error) {
 	var keys []*sshAgent.Key
 	for _, agent := range a.agents {
-		agentKeys, err := agent.List()
+		agentKeys, err := agentListKeysBanned(agent, a.bannedKeys)
 		if err != nil {
 			return keys, err
 		}
-		for _, key := range agentKeys {
-			keyStr := strings.ReplaceAll(string(ssh.MarshalAuthorizedKey(key)), "\n", " ") + key.Comment
-			ok := true
-			for _, bannedKey := range a.bannedKeys {
-				if bannedKey == keyStr {
-					ok = false
-				}
-			}
-			if !ok {
-				continue
-			}
-			keys = append(keys, key)
-		}
+		keys = append(keys, agentKeys...)
 	}
 	return keys, nil
 }
 
 func (a MergedAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
-	var res *ssh.Signature
-	var err error
+	// find the correct agent to request signing from
 	for _, agent := range a.agents {
-		res, err = agent.Sign(key, data)
-		if err == nil {
-			break
+		agentKeys, err := agentListKeysBanned(agent, a.bannedKeys)
+		if err != nil {
+			return nil, err
+		}
+		for _, aKey := range agentKeys {
+			if bytes.Equal(key.Marshal(), aKey.Marshal()) {
+				return agent.Sign(key, data)
+			}
 		}
 	}
-	return res, err
+	return nil, fmt.Errorf("no agent found for key: %s", ssh.MarshalAuthorizedKey(key))
 }
 
 func (a MergedAgent) Add(key sshAgent.AddedKey) error {
